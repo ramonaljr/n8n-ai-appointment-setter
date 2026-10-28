@@ -1,0 +1,2494 @@
+{
+  "name": "AI Appointment Setter",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "getslots",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -480,
+        -240
+      ],
+      "id": "2ec44b30-7a28-4062-adb9-a1bf82ee1238",
+      "name": "GetSlots"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "callresults",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -496,
+        1392
+      ],
+      "id": "5e3f6fce-be48-4a56-9b33-401cae89e4b4",
+      "name": "call_results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $input.first().json;\nconst message = original.body?.message ?? {};\nconst calls = message.toolCallList ?? message.toolWithToolCallList ?? message.toolCalls ?? [];\nconst wrapper = calls.find((item) => String(\n  item.name ?? item.toolCall?.function?.name ?? item.function?.name ?? ''\n).toLowerCase() === 'getslots') ?? calls[0] ?? {};\nconst toolCall = wrapper.toolCall ?? wrapper;\nlet args = toolCall.parameters ?? toolCall.function?.arguments ?? wrapper.parameters ?? wrapper.function?.arguments ?? {};\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch { throw new Error('GetSlots arguments are not valid JSON.'); }\n}\nconst toolCallId = String(toolCall.id ?? wrapper.id ?? '');\nconst start = new Date(args.starttime);\nconst end = new Date(args.endtime);\nif (!toolCallId) throw new Error('Vapi did not include a GetSlots tool-call ID.');\nif (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {\n  throw new Error('GetSlots requires valid ISO-8601 starttime and endtime values.');\n}\nreturn [{ json: {\n  ...original,\n  toolCallId,\n  callId: String(message.call?.id ?? ''),\n  starttime: start.toISOString(),\n  endtime: end.toISOString(),\n  timezone: 'America/Chicago'\n} }];"
+      },
+      "id": "prepare-getslots-vapi",
+      "name": "Prepare GetSlots Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "mode": "id",
+          "value": "you@example.com"
+        },
+        "timeMin": "={{ $json.starttime }}",
+        "timeMax": "={{ $json.endtime }}",
+        "options": {}
+      },
+      "id": "google-calendar-getslots",
+      "name": "Check Google Calendar Availability",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        48,
+        -240
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  results: [\n    {\n      toolCallId: $(\"Prepare GetSlots Request\").first().json.toolCallId,\n      result: \"The requested appointment time is available. You may proceed with booking.\"\n    }\n  ]\n} }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-vapi-getslots",
+      "name": "Respond to Vapi GetSlots",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        560,
+        -336
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "71de18cf-792f-4e66-9d01-efaedb980439",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        272,
+        -240
+      ],
+      "id": "7bb97e91-3712-4c3a-a92d-eee1ddc7be6e",
+      "name": "Check if available?"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID",
+          "mode": "list",
+          "cachedResultName": "you@example.com"
+        },
+        "returnAll": true,
+        "options": {
+          "orderBy": "startTime"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        -176
+      ],
+      "id": "10c0ee79-2281-4317-b47e-f4410d6d0fe5",
+      "name": "Get all Caledar Events",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $(\"Prepare GetSlots Request\").first().json;\nconst timeZone = request.timezone || \"America/Chicago\";\nconst slotMinutes = 30;\nconst slotMs = slotMinutes * 60 * 1000;\nconst rangeStart = new Date(request.starttime);\nconst rangeEnd = new Date(request.endtime);\n\nif (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime()) || rangeEnd <= rangeStart) {\n  throw new Error(\"The requested time range is invalid.\");\n}\n\nconst partFormatter = new Intl.DateTimeFormat(\"en-US\", {\n  timeZone, weekday: \"short\", year: \"numeric\", month: \"2-digit\", day: \"2-digit\",\n  hour: \"2-digit\", minute: \"2-digit\", hourCycle: \"h23\",\n});\nconst displayFormatter = new Intl.DateTimeFormat(\"en-US\", {\n  timeZone, weekday: \"long\", month: \"long\", day: \"numeric\",\n  hour: \"numeric\", minute: \"2-digit\", hour12: true,\n});\n\nfunction localParts(date) {\n  return Object.fromEntries(partFormatter.formatToParts(date)\n    .filter(({ type }) => type !== \"literal\")\n    .map(({ type, value }) => [type, value]));\n}\n\nfunction eventDate(value) {\n  if (!value) return null;\n  const date = new Date(value);\n  return Number.isNaN(date.getTime()) ? null : date;\n}\n\n// Google Calendar returns one item per event. Ignore cancelled and transparent events.\nconst busy = $input.all().map(({ json }) => {\n  if (json.status === \"cancelled\" || json.transparency === \"transparent\") return null;\n  const start = eventDate(json.start?.dateTime || json.start?.date);\n  const end = eventDate(json.end?.dateTime || json.end?.date);\n  return start && end && end > start ? { start, end } : null;\n}).filter(Boolean);\n\nconst availableSlots = [];\nconst firstSlotMs = Math.ceil(rangeStart.getTime() / slotMs) * slotMs;\nfor (let startMs = firstSlotMs; startMs + slotMs <= rangeEnd.getTime(); startMs += slotMs) {\n  const start = new Date(startMs);\n  const end = new Date(startMs + slotMs);\n  const localStart = localParts(start);\n  const localEnd = localParts(end);\n  const hour = Number(localStart.hour);\n  const weekday = localStart.weekday;\n\n  // Monday–Friday, 9:00 AM–6:00 PM in America/Chicago.\n  const isBusinessDay = weekday !== \"Sat\" && weekday !== \"Sun\";\n  const isWithinHours = hour >= 9 && hour < 18 && (Number(localEnd.hour) < 18 || (Number(localEnd.hour) === 18 && Number(localEnd.minute) === 0));\n  const staysSameLocalDay = localStart.year === localEnd.year && localStart.month === localEnd.month && localStart.day === localEnd.day;\n  const overlapsBusy = busy.some(({ start: busyStart, end: busyEnd }) => start < busyEnd && end > busyStart);\n\n  if (isBusinessDay && isWithinHours && staysSameLocalDay && !overlapsBusy) {\n    availableSlots.push({\n      startTime: start.toISOString(),\n      endTime: end.toISOString(),\n      display: displayFormatter.format(start),\n    });\n  }\n}\n\nconst result = availableSlots.length\n  ? \"Available 30-minute appointment start times: \" + availableSlots.map(({ display }) => display).join(\"; \")\n  : \"No 30-minute appointment times are available in the requested range.\";\n\nreturn [{\n  json: {\n    results: [{ toolCallId: request.toolCallId, result }],\n    availableSlots,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        -176
+      ],
+      "id": "acecacdd-15b9-4d58-9f83-44324c788c58",
+      "name": "Available Start Time and Date Ranges"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1056,
+        -176
+      ],
+      "id": "60873b7c-2c90-49bd-b59c-995fb74c5a44",
+      "name": "Respond to Vapi GetSlots1"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bookslots",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -480,
+        176
+      ],
+      "id": "4b352604-3028-42c5-b2e5-74df5de0ac57",
+      "name": "BookSlots"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bookslots-valid-request",
+              "leftValue": "={{ $json.isValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -48,
+        176
+      ],
+      "id": "6815806a-1e6c-424b-b5b3-8596d78442c9",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "edit-builderrorresponsepayload",
+              "name": "bookingMessage",
+              "value": "Booking could not be completed. Please collect the caller’s full name, a valid email address, and a valid start and end time before trying again.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        176,
+        272
+      ],
+      "id": "88b2126e-8b2c-4e61-9f5c-5080ff1c3d54",
+      "name": "Build Error Response Payload"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { results: [{ toolCallId: $(\"Input Arguments from Booking Tools\").first().json.toolCallId, result: $json.bookingMessage }] } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        400,
+        272
+      ],
+      "id": "e6b190e0-0bdc-4395-9ccf-b0bef16b4f9f",
+      "name": "Respond with Error"
+    },
+    {
+      "parameters": {
+        "jsCode": "const escapeStringForJson = (str) => {\n    return str\n        .replace(/\\\\/g, '\\\\\\\\') // Escape backslashes\n        .replace(/\"/g, '\\\\\"')    // Escape double quotes\n        .replace(/\\n/g, '\\\\n')   // Escape newlines\n        .replace(/\\r/g, '\\\\r')   // Escape carriage returns\n        .replace(/\\t/g, '\\\\t');  // Escape tabs\n};\n\n// Escape the notes field\n$input.item.json.notes = escapeStringForJson($input.item.json.notes);\n\nreturn $input.item;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        176,
+        80
+      ],
+      "id": "0803d928-ce3b-47e5-bef3-9723b2116f69",
+      "name": "Escape Json"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all input items\nconst items = $input.all();\n\n// Loop through each item\nfor (const item of items) {\n  // Get the values from the current item's JSON data\n  const startTimeUTC = item.json.starttime;\n  const endTimeUTC = item.json.endtime;\n  const targetTimeZone = item.json.timeZone; // e.g., \"America/Chicago\"\n\n  // Basic validation: ensure the necessary fields exist\n  if (!startTimeUTC || !endTimeUTC || !targetTimeZone) {\n    console.warn(`Skipping item due to missing time data or timezone. Item JSON: ${JSON.stringify(item.json)}`);\n    item.json.conversionError = \"Missing starttime, endtime, or timeZone\";\n    continue; // Move to the next item\n  }\n\n  try {\n    // --- Start Time Conversion ---\n    // Parse the original UTC ISO string using Luxon (NO $ prefix)\n    const startDt = luxon.DateTime.fromISO(startTimeUTC, { zone: 'utc' });\n\n    // Convert the DateTime object to the target timezone\n    const startDtTargetZone = startDt.setZone(targetTimeZone);\n\n    // Check if the conversion was valid\n    if (!startDtTargetZone.isValid) {\n      throw new Error(`Failed to convert start time. Reason: ${startDtTargetZone.invalidReason || 'Unknown'}`);\n    }\n\n    // Format the result back into an ISO string with the correct offset\n    item.json.starttime = startDtTargetZone.toISO();\n\n    // --- End Time Conversion ---\n    // Parse the original UTC ISO string using Luxon (NO $ prefix)\n    const endDt = luxon.DateTime.fromISO(endTimeUTC, { zone: 'utc' });\n\n    // Convert the DateTime object to the target timezone\n    const endDtTargetZone = endDt.setZone(targetTimeZone);\n\n     // Check if the conversion was valid\n    if (!endDtTargetZone.isValid) {\n      throw new Error(`Failed to convert end time. Reason: ${endDtTargetZone.invalidReason || 'Unknown'}`);\n    }\n\n    // Format the result back into an ISO string with the correct offset\n    item.json.endtime = endDtTargetZone.toISO();\n\n    // Optionally remove the error flag if conversion was successful this time\n    delete item.json.conversionError;\n\n  } catch (error) {\n    console.error(`Error converting time for item: ${JSON.stringify(item.json)}. Error: ${error.message}`);\n    // Add/update the error flag to the item's JSON\n    item.json.conversionError = error.message;\n  }\n}\n// Return the modified array of items\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        80
+      ],
+      "id": "b609ff16-b5f1-4e86-a7e8-c0e50307a511",
+      "name": "Convert time to CST America/Chicago"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID",
+          "mode": "list",
+          "cachedResultName": "you@example.com"
+        },
+        "start": "={{ $json.starttime }}",
+        "end": "={{ $json.endtime }}",
+        "additionalFields": {
+          "allday": "no",
+          "attendees": [
+            "={{ $json.email }}"
+          ],
+          "conferenceDataUi": {
+            "conferenceDataValues": {
+              "conferenceSolution": "hangoutsMeet"
+            }
+          },
+          "description": "={{ $json.notes }}",
+          "showMeAs": "opaque",
+          "summary": "={{ $json.Title }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        624,
+        80
+      ],
+      "id": "0d5c30a9-3bb2-454c-afbe-7bcc98f7fb65",
+      "name": "Create an event",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "628b0d4c-0b90-4835-93d1-dd7c0d0c01d7",
+              "name": "id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "8b7e1564-253f-4da7-a421-65bee9668112",
+              "name": "description",
+              "value": "={{ $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "7d44a14a-b855-4e15-bd0e-727c69ccf7cf",
+              "name": "starttime",
+              "value": "={{ $json.start.dateTime }}",
+              "type": "string"
+            },
+            {
+              "id": "6c57058a-1a0f-4e77-835a-a59e8565169d",
+              "name": "status",
+              "value": "={{ $json.status }}",
+              "type": "string"
+            },
+            {
+              "id": "89bae6c6-7ebd-499a-9975-af5f2d805e5e",
+              "name": "Timezone",
+              "value": "={{ $json.start.timeZone }}",
+              "type": "string"
+            },
+            {
+              "id": "61dbd21d-43b5-4f9d-b4b6-cc64a60c3d97",
+              "name": "attendees",
+              "value": "={{ $json.attendees }}",
+              "type": "array"
+            },
+            {
+              "id": "3f16eec6-5840-43e3-bb3e-2b437360635a",
+              "name": "hangoutLink",
+              "value": "={{ $json.hangoutLink }}",
+              "type": "string"
+            },
+            {
+              "id": "c488f05a-5096-435b-8567-9dc71b44c159",
+              "name": "Title",
+              "value": "={{ $json.summary }}",
+              "type": "string"
+            },
+            {
+              "id": "65b84a9b-8a31-400f-9b8e-5f3c3a987157",
+              "name": "endtime",
+              "value": "={{ $json.end.dateTime }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        880,
+        80
+      ],
+      "id": "984e43fd-2d37-4fd0-826f-54030969acd7",
+      "name": "Booking Payload"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "edit-successresponse",
+              "name": "bookingMessage",
+              "value": "={{ \"Appointment booked for \" + $(\"Input Arguments from Booking Tools\").first().json.fullName + \".\" }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1088,
+        80
+      ],
+      "id": "b4b4fc6a-826f-4226-a23b-0d3406f8b42e",
+      "name": "Success Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { results: [{ toolCallId: $(\"Input Arguments from Booking Tools\").first().json.toolCallId, result: $json.bookingMessage }] } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1280,
+        144
+      ],
+      "id": "e75c20b7-830d-4352-954e-23f614376753",
+      "name": "Respond to Vapi"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "161f70ff-81f9-4d73-9075-4e5dec0cf43c",
+              "leftValue": "={{ $('Success Response').item.json.bookingMessage }}",
+              "rightValue": "booked",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        1456,
+        144
+      ],
+      "id": "7e9676a5-bc71-4a32-9b83-c1f8acb9dd8b",
+      "name": "If Booking is confirmed"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "65273212-6c6b-461f-b173-3b73072b262e",
+              "name": "startTime",
+              "value": "={{ $('Booking Payload').item.json.starttime }}",
+              "type": "string"
+            },
+            {
+              "id": "95a8fa1f-b379-4087-acfb-7338f984d0af",
+              "name": "endTime",
+              "value": "={{ $('Booking Payload').item.json.endtime }}",
+              "type": "string"
+            },
+            {
+              "id": "d1577097-0b82-4dfa-805f-833d4b298f11",
+              "name": "status",
+              "value": "={{ $('Booking Payload').item.json.status }}",
+              "type": "string"
+            },
+            {
+              "id": "4788335f-43e4-494d-a9fa-fbfac10a99bc",
+              "name": "Timezone",
+              "value": "={{ $('Booking Payload').item.json.Timezone }}",
+              "type": "string"
+            },
+            {
+              "id": "99168027-5aa0-4257-b177-23bbcae099a6",
+              "name": "description",
+              "value": "={{ $('Booking Payload').item.json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "2003d1c2-2527-4181-8a4d-b799f63ed078",
+              "name": "attendees[0].responseStatus",
+              "value": "={{ $('Booking Payload').item.json.attendees[0].responseStatus }}",
+              "type": "string"
+            },
+            {
+              "id": "2b9987a0-310f-4bc0-b9c8-2b69d73e387d",
+              "name": "attendees[0].email",
+              "value": "={{ $('Booking Payload').item.json.attendees[0].email }}",
+              "type": "string"
+            },
+            {
+              "id": "0ee7e3dd-3d22-486c-ae1f-4090c2bf6a1a",
+              "name": "hangoutLink",
+              "value": "={{ $('Booking Payload').item.json.hangoutLink }}",
+              "type": "string"
+            },
+            {
+              "id": "5ade6774-b136-41fa-9f69-a714a1cf2d33",
+              "name": "attendee.name",
+              "value": "={{ $(\"Input Arguments from Booking Tools\").item.json.fullName }}",
+              "type": "string"
+            },
+            {
+              "id": "1ab46ed1-da53-476c-867a-800da2ae732f",
+              "name": "call.id",
+              "value": "={{ $('Input Arguments from Booking Tools').item.json.callId }}",
+              "type": "string"
+            },
+            {
+              "id": "7d845806-f725-4901-a3e9-8fdbbfacebfc",
+              "name": "assistant.name",
+              "value": "Amy",
+              "type": "string"
+            },
+            {
+              "id": "b4d74441-1b5f-4c4b-9a84-1fff2b7eb783",
+              "name": "event.id",
+              "value": "={{ $(\"Booking Payload\").item.json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "4debafec-c70e-41aa-806f-a65619b8b53a",
+              "name": "Title",
+              "value": "={{ $('Booking Payload').item.json.Title }}",
+              "type": "string"
+            },
+            {
+              "id": "5b061e70-a1cc-4864-aeb5-0d0be415eddf",
+              "name": "customer_number",
+              "value": "={{ $('Input Arguments from Booking Tools').item.json.customer_number }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1664,
+        144
+      ],
+      "id": "1935bb87-928a-4969-b754-f46f4ee62d8f",
+      "name": "Information to be saved in Airtable"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "AI Appointment Setter Build"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Table 1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.attendee.name }}",
+            "CallRecordingID": "={{ $json.call.id }}",
+            "Phone Number": "={{ $json.customer_number }}",
+            "starttime": "={{ $json.startTime }}",
+            "endtime": "={{ $json.endTime }}",
+            "Email": "={{ $json.attendees[0].email }}",
+            "Booking Status": "={{ $json.status }}",
+            "meetlink": "={{ $('Create an event').item.json.conferenceData.entryPoints[0].uri }}",
+            "meetdescription": "={{ $json.Title }} - {{ $json.description }}",
+            "Voice Agent": "={{ $json.assistant.name }}",
+            "eventID": "={{ $json.event.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Phone Number",
+              "displayName": "Phone Number",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Booking Status",
+              "displayName": "Booking Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "CallRecordingID",
+              "displayName": "CallRecordingID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "starttime",
+              "displayName": "starttime",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "endtime",
+              "displayName": "endtime",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "meetlink",
+              "displayName": "meetlink",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "meetdescription",
+              "displayName": "meetdescription",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Voice Agent",
+              "displayName": "Voice Agent",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "eventID",
+              "displayName": "eventID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "typecast": true
+        }
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        1856,
+        144
+      ],
+      "id": "9ebc8b41-a4ee-4382-b06d-d5292d06ec72",
+      "name": "Log book details"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $json;\nconst raw = original.error?.message ?? original.error?.description ?? original.message ?? 'Booking could not be completed.';\nconst text = String(raw);\nconst bookingMessage = text.includes('no_available_users_found_error')\n  ? 'This time slot is no longer available.'\n  : text;\nreturn { json: { ...original, bookingMessage } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        240
+      ],
+      "id": "c9671fcd-fc58-439e-8786-97bc06548569",
+      "name": "Add Friendly Error"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "updateslots",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -496,
+        592
+      ],
+      "id": "f42f04f6-2c29-4c57-a7ea-b8b8d9b8c2e6",
+      "name": "UpdateSlots"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $json;\n\nconst body = original.body ?? {};\nconst message = body.message ?? {};\n\nconst calls =\n  message.toolCallList ??\n  message.toolWithToolCallList ??\n  message.toolCalls ??\n  [];\n\nconst wrapper = calls.find((item) =>\n  String(\n    item.name ??\n    item.toolCall?.function?.name ??\n    item.function?.name ??\n    ''\n  ).toLowerCase() === 'updateslots'\n) ?? calls[0] ?? {};\n\nconst toolCall = wrapper.toolCall ?? wrapper;\n\nlet args =\n  toolCall.parameters ??\n  toolCall.function?.arguments ??\n  wrapper.parameters ??\n  wrapper.function?.arguments ??\n  {};\n\nif (typeof args === 'string') {\n  args = JSON.parse(args);\n}\n\nconst name = String(args.fullName ?? args.name ?? '').trim();\nconst email = String(args.email ?? '').trim().toLowerCase();\n\nreturn {\n  json: {\n    ...original,\n\n    Calls: calls,\n    toolCallId: String(toolCall.id ?? wrapper.id ?? ''),\n    call: {\n      id: String(message.call?.id ?? ''),\n    },\n\n    name,\n    fullName: name,\n    email,\n    customer_number: String(message.call?.customer?.number ?? ''),\n\n    eventId: String(args.eventId ?? args.event_id ?? ''),\n    starttime: String(args.starttime ?? ''),\n    endtime: String(args.endtime ?? ''),\n\n    Rescheduled_starttime: String(\n      args.rescheduled_starttime ?? args.newStarttime ?? args.new_starttime ?? ''\n    ),\n    Rescheduled_endtime: String(\n      args.rescheduled_endtime ?? args.newEndtime ?? args.new_endtime ?? ''\n    ),\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        592
+      ],
+      "id": "ea1a960c-995c-4d04-b30a-387e518034dc",
+      "name": "Input Arguments from UpdateSlot Tool1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e75fcd3c-3bed-4add-82fd-be5fb167dd4f",
+              "leftValue": "={{ $json.name }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "689d8c94-0fcd-48df-a401-630f515b4242",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "5c79cc76-8d56-4b2b-9f61-25ad21768913",
+              "leftValue": "={{ $json.Rescheduled_starttime }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "6d512cd2-4d42-4b7b-9631-4fbed2031295",
+              "leftValue": "={{ $json.Rescheduled_endtime }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "07d37ea1-8a8c-472a-8bde-2b5b2c723fe0",
+              "leftValue": "={{ $json.starttime }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "check-update-original-endtime",
+              "leftValue": "={{ $json.endtime }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -112,
+        592
+      ],
+      "id": "6c5fcdde-b1c5-4d34-bdb2-0f88affc9311",
+      "name": "Check if required is provided"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "AI Appointment Setter Build"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Table 1"
+        },
+        "filterByFormula": "={{ `AND(\n  {Phone Number} = '${$json.customer_number}',\n  {Email} = '${$json.email}',\n  IS_SAME(\n    DATETIME_PARSE({starttime}),\n    DATETIME_PARSE('${$json.starttime}'),\n    'minute'\n  )\n)` }}",
+        "returnAll": false,
+        "limit": 1,
+        "options": {
+          "fields": [
+            "Email",
+            "Name",
+            "starttime",
+            "eventID"
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        80,
+        544
+      ],
+      "id": "7e679de4-f975-4d32-b38a-3bc88894cdd5",
+      "name": "Find original appointment",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID",
+          "mode": "list",
+          "cachedResultName": "you@example.com"
+        },
+        "eventId": "={{ $json.fields.eventID }}",
+        "updateFields": {
+          "allday": "no",
+          "end": "={{ $('Input Arguments from UpdateSlot Tool1').item.json.Rescheduled_endtime }}",
+          "start": "={{ $('Check if required is provided').item.json.Rescheduled_starttime }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        256,
+        544
+      ],
+      "id": "9b383b38-5722-4d64-9490-02814e4067db",
+      "name": "Update an event",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "AI Appointment Setter Build"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Table 1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventID": "={{ $('Find original appointment').item.json.fields.eventID }}",
+            "Booking Status": "Updated/Rescheduled",
+            "starttime": "={{ $json.start.dateTime }}",
+            "endtime": "={{ $json.end.dateTime }}",
+            "id": "={{ $('Find original appointment').first().json.id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Phone Number",
+              "displayName": "Phone Number",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Booking Status",
+              "displayName": "Booking Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "CallRecordingID",
+              "displayName": "CallRecordingID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "starttime",
+              "displayName": "starttime",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "endtime",
+              "displayName": "endtime",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "meetlink",
+              "displayName": "meetlink",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "meetdescription",
+              "displayName": "meetdescription",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Voice Agent",
+              "displayName": "Voice Agent",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "eventID",
+              "displayName": "eventID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        464,
+        544
+      ],
+      "id": "0470e2be-0344-4e36-a968-5cbc9c819767",
+      "name": "Update record"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        640
+      ],
+      "id": "fca9c822-ee7a-4a3e-b912-692d1207a175",
+      "name": "Respond to VAPI about updating Slots"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "047dd2e3-947e-4409-a44b-1db8d0d81900",
+              "name": "results[0].toolCallId",
+              "value": "={{ $('Input Arguments from UpdateSlot Tool1').item.json.toolCallId }}",
+              "type": "string"
+            },
+            {
+              "id": "340e7903-91fa-43a7-8b26-5bcaa42bad21",
+              "name": "results[0].result",
+              "value": "={{ $json.error?.message ?? $json.error?.description ?? $json.fields?.['Booking Status'] ?? 'Updated/Rescheduled' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        464,
+        736
+      ],
+      "id": "bac0ef9a-15fe-4f26-806f-066fafcfa010",
+      "name": "Response to call_id"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ef7b0858-ef84-4f2c-ae54-9f6720cea96d",
+              "name": "results[0].toolCallId",
+              "value": "={{ $('Input Arguments from UpdateSlot Tool1').item.json.toolCallId }}",
+              "type": "string"
+            },
+            {
+              "id": "1e7f2eaf-4347-4be0-8bc3-41ea34253a0b",
+              "name": "results[0].result",
+              "value": "You must provide an email, name, previous starttime & endtime and rescheduled starttime to call this tool.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        80,
+        736
+      ],
+      "id": "1bd6167e-a479-4876-bb2c-8effd25523c8",
+      "name": "Build Error Response Payload1"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        256,
+        736
+      ],
+      "id": "48ba5ad1-f944-4a27-984b-eee1fc5db4f6",
+      "name": "Respond with Error1"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cancelslots",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -496,
+        1056
+      ],
+      "id": "44a1c3a1-90ea-4b84-a409-659f564aa207",
+      "name": "CancelSlots"
+    },
+    {
+      "parameters": {
+        "content": "This is to get slots in a Google Calendar to check availability.",
+        "height": 368,
+        "width": 2672
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        -368
+      ],
+      "id": "7fd108c8-6431-45ab-b24b-275fe35facae",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "This is to Book Slots once the slots is confirmed available.",
+        "height": 448,
+        "width": 2672,
+        "color": "#7D92E8"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        16
+      ],
+      "id": "6fb8a5c5-6bfc-49cb-b3ff-44f2f32ab721",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $input.first().json;\nconst message = original.body?.message ?? {};\nconst calls = message.toolCallList ?? message.toolWithToolCallList ?? message.toolCalls ?? [];\nconst wrapper = calls.find((item) => String(\n  item.name ?? item.toolCall?.function?.name ?? item.function?.name ?? ''\n).toLowerCase() === 'bookslots') ?? calls[0] ?? {};\nconst toolCall = wrapper.toolCall ?? wrapper;\nlet args = toolCall.parameters ?? toolCall.function?.arguments ?? wrapper.parameters ?? wrapper.function?.arguments ?? {};\nif (typeof args === 'string') {\n  try { args = JSON.parse(args); } catch { throw new Error('BookSlots arguments are not valid JSON.'); }\n}\nconst start = new Date(args.starttime);\nconst end = new Date(args.endtime);\nconst fullName = String(args.fullName ?? args.name ?? '').trim();\nconst email = String(args.email ?? '').trim().toLowerCase();\nconst notes = String(args.notes ?? '').trim();\nconst appointmentType = String(args.appointmentType ?? args.Title ?? args.title ?? 'Primary consultation').trim();\nconst toolCallId = String(toolCall.id ?? wrapper.id ?? '');\nconst isValid = Boolean(toolCallId && fullName) && /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) &&\n  !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end > start;\nreturn [{ json: {\n  ...original,\n  toolCallId,\n  callId: String(message.call?.id ?? ''),\n  fullName, email, notes, appointmentType,\n  starttime: Number.isNaN(start.getTime()) ? '' : start.toISOString(),\n  endtime: Number.isNaN(end.getTime()) ? '' : end.toISOString(),\n  Title: appointmentType + ' – ' + (fullName || 'New caller'),\n  timeZone: 'America/Chicago',\n  customer_number: String(message.call?.customer?.number ?? ''),\n  isValid,\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        176
+      ],
+      "id": "0a59bf6c-05ea-41d4-b905-65a5a9235f88",
+      "name": "Input Arguments from Booking Tools"
+    },
+    {
+      "parameters": {
+        "content": "This is to Update Slots if customer/client is requesting to reschedule their slots",
+        "height": 432,
+        "width": 2672,
+        "color": "#A4E5C0"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        480
+      ],
+      "id": "f159f22e-6f96-4bf1-975b-84bb2d69cb18",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "72ffbd03-cba4-49d5-93ad-c552e08b6c2d",
+              "name": "calls[0].id",
+              "value": "={{ $json.body.message.toolWithToolCallList[0].toolCall.id }}",
+              "type": "string"
+            },
+            {
+              "id": "42a3db6e-0604-4c17-8a6a-8defa91590b8",
+              "name": "name",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "f97a86b5-e101-4553-9d96-3ba7a383f006",
+              "name": "email",
+              "value": "={{ $json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "53e6dc5b-74fe-42f1-a2e4-3cea7706852e",
+              "name": "starttime",
+              "value": "={{ $json.starttime }}",
+              "type": "string"
+            },
+            {
+              "id": "2d60f7f9-2044-476c-89b2-1d1ebc0354c3",
+              "name": "Cancelnotes",
+              "value": "={{ $json.cancelNotes }}",
+              "type": "string"
+            },
+            {
+              "id": "4171c668-7023-4cb2-bea1-36eeabdfeee7",
+              "name": "call.id",
+              "value": "={{ $json.callId }}",
+              "type": "string"
+            },
+            {
+              "id": "2cd765e6-70b1-49e7-a73d-da710dac1595",
+              "name": "customer_number",
+              "value": "={{ $json.customer_number }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -80,
+        1056
+      ],
+      "id": "49b0ae28-3533-45b2-a361-3bee13357ec2",
+      "name": "Input Aguments from cancelslot Tool"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $json;\nconst message = original.body?.message ?? {};\n\nconst calls =\n  message.toolWithToolCallList ??\n  message.toolCallList ??\n  message.toolCalls ??\n  [];\n\nconst wrapper = calls.find((item) =>\n  String(\n    item.name ??\n    item.toolCall?.function?.name ??\n    item.function?.name ??\n    ''\n  ).toLowerCase() === 'cancelslots'\n) ?? calls[0] ?? {};\n\nconst toolCall = wrapper.toolCall ?? wrapper;\n\nlet args =\n  toolCall.function?.arguments ??\n  toolCall.parameters ??\n  wrapper.function?.arguments ??\n  wrapper.parameters ??\n  {};\n\nif (typeof args === 'string') {\n  args = JSON.parse(args);\n}\n\nreturn {\n  json: {\n    ...original,\n\n    callId: String(message.call?.id ?? ''),\n    toolCallId: String(toolCall.id ?? wrapper.id ?? ''),\n    customer_number: String(message.call?.customer?.number ?? ''),\n\n    name: String(args.name ?? args.fullName ?? '').trim(),\n    email: String(args.email ?? '').trim().toLowerCase(),\n    eventId: String(args.eventId ?? args.event_id ?? ''),\n    starttime: String(args.starttime ?? ''),\n    endtime: String(args.endtime ?? ''),\n    reason: String(args.reason ?? ''),\n    cancelNotes: String(args.cancelNotes ?? ''),\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -288,
+        1056
+      ],
+      "id": "81bdb179-c2d4-4ffe-8041-d8f5d8e81a58",
+      "name": "Parse CancelSlot"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "123044f5-de90-4db1-b05f-61a0f49acb52",
+              "leftValue": "={{ $json.name }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "94c278f2-efc1-4840-95df-f0fcce36efd9",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "6d1265c2-a8fe-47e1-ae69-9c4d5f31bab4",
+              "leftValue": "={{ $json.starttime }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        144,
+        1056
+      ],
+      "id": "30e93866-88a6-427c-be5e-0ec8647f435a",
+      "name": "Check if required info is provided for cancellation"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "AI Appointment Setter Build"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Table 1"
+        },
+        "filterByFormula": "={{ `AND(\n  {Phone Number} = '${$json.customer_number}',\n  {Email} = '${$json.email}',\n  IS_SAME(\n    DATETIME_PARSE({starttime}),\n    DATETIME_PARSE('${$json.starttime}'),\n    'minute'\n  )\n)` }}",
+        "returnAll": false,
+        "limit": 1,
+        "options": {
+          "fields": [
+            "Email",
+            "Name",
+            "starttime",
+            "eventID"
+          ]
+        },
+        "sort": {
+          "property": []
+        }
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        368,
+        960
+      ],
+      "id": "8cf407a2-1fab-44a1-806e-b906a13d851c",
+      "name": "Find Appointment Record",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "AI Appointment Setter Build"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Table 1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventID": "={{ $('Find Appointment Record').item.json.fields.eventID }}",
+            "Booking Status": "Cancelled",
+            "id": "={{ $('Find Appointment Record').first().json.id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Phone Number",
+              "displayName": "Phone Number",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Booking Status",
+              "displayName": "Booking Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "CallRecordingID",
+              "displayName": "CallRecordingID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "starttime",
+              "displayName": "starttime",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "endtime",
+              "displayName": "endtime",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "meetlink",
+              "displayName": "meetlink",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "meetdescription",
+              "displayName": "meetdescription",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Voice Agent",
+              "displayName": "Voice Agent",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "eventID",
+              "displayName": "eventID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        960
+      ],
+      "id": "82fd2845-294f-48c4-be41-dda12b2443c4",
+      "name": "Update Record to Cancel"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID",
+          "mode": "list",
+          "cachedResultName": "you@example.com"
+        },
+        "eventId": "={{ $json.fields.eventID }}",
+        "options": {
+          "sendUpdates": "all"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        960
+      ],
+      "id": "fa861162-a3b6-4516-84e0-fe37f238ee3f",
+      "name": "Delete an event",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f512e28c-fc07-489f-8d19-4078e0f594bb",
+              "name": "results[0].toolCallId",
+              "value": "={{ $('Parse CancelSlot').item.json.toolCallId }}",
+              "type": "string"
+            },
+            {
+              "id": "65e1187f-55da-4179-a672-eea32a09e177",
+              "name": "results[0].result",
+              "value": "={{ $json.error?.message ?? $json.error?.description ?? $json.fields?.['Booking Status'] ?? 'Cancelled' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        800,
+        1120
+      ],
+      "id": "7c387af2-9cc7-4104-950a-1a6cfbebe44f",
+      "name": "Call_id and Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1040,
+        1040
+      ],
+      "id": "52a09b45-ec41-464f-a40d-5275baca21e4",
+      "name": "Respond to VAPI about Cancellation"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "da62554a-b278-4513-b0df-82f1eaa943e9",
+              "name": "results[0].toolCallId",
+              "value": "={{ $('Parse CancelSlot').item.json.toolCallId }}",
+              "type": "string"
+            },
+            {
+              "id": "2a8233f8-2980-46cd-a0d2-83502ebdbac3",
+              "name": "results[0].result",
+              "value": "You must provide an email, name and starttime to call this tool.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        368,
+        1152
+      ],
+      "id": "ad40d00e-8193-46b3-b849-ca2aee31da27",
+      "name": "Build Error Response"
+    },
+    {
+      "parameters": {
+        "content": "This is to Cancel Slots if customer/client is requesting to cancel their slots.",
+        "height": 384,
+        "width": 2672,
+        "color": "#E67F7F"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        928
+      ],
+      "id": "e5cc14d8-03d5-46bd-adce-a8a202b88af6",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        592,
+        1152
+      ],
+      "id": "0eba6a64-0bd1-4ad9-bf99-467030054a46",
+      "name": "Respond with Error to VAPI"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "41c9c3c4-6477-4b90-b7e3-40305b8650de",
+              "name": "transcript",
+              "value": "={{ $json.body.message.artifact.transcript }}",
+              "type": "string"
+            },
+            {
+              "id": "8f6bbeb4-d7bb-4089-9b1f-ccb0a1963df4",
+              "name": "recordingUrl",
+              "value": "={{ $json.body.message.artifact.recordingUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "7223b01a-b486-4c2b-9f5b-ce34d7a13783",
+              "name": "call.summary",
+              "value": "={{ $json.body.message.analysis.summary }}",
+              "type": "string"
+            },
+            {
+              "id": "e25c4d7d-644e-4ff4-9e1a-6f654c9ceb96",
+              "name": "cost",
+              "value": "={{ $json.body.message.cost }}",
+              "type": "number"
+            },
+            {
+              "id": "2cf9c2bd-5fc7-4701-9dc6-ae3e982c0e8f",
+              "name": "call.id",
+              "value": "={{ $json.body.message.call.id }}",
+              "type": "string"
+            },
+            {
+              "id": "f7b8e805-8761-48a9-b466-9a63c2a97390",
+              "name": "call.orgId",
+              "value": "={{ $json.body.message.call.orgId }}",
+              "type": "string"
+            },
+            {
+              "id": "fdd245ce-dd64-43db-bd9b-b66daef2d759",
+              "name": "assistant.name",
+              "value": "={{ $json.body.message.assistant.name }}",
+              "type": "string"
+            },
+            {
+              "id": "b7a26f4c-5ffc-4faa-a248-5b5e0889c610",
+              "name": "startedAt",
+              "value": "={{ $json.body.message.startedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "62466183-8bd6-4b20-bc8c-b258518f76ee",
+              "name": "endedAt",
+              "value": "={{ $json.body.message.endedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "76dbc730-2e5f-42b6-b4e4-7b9f6ea0e7d8",
+              "name": "assistant.id",
+              "value": "={{ $json.body.message.assistant.id }}",
+              "type": "string"
+            },
+            {
+              "id": "658e2d28-5d4f-4909-887f-578b42497d96",
+              "name": "body.message.assistant",
+              "value": "={{ $json.body.message.assistant }}",
+              "type": "object"
+            },
+            {
+              "id": "e860a4c6-e382-4a2d-b8b6-60ffa56f6511",
+              "name": "assistantId",
+              "value": "={{ $json.body.message.call.assistantId }}",
+              "type": "string"
+            },
+            {
+              "id": "4c259f3b-1eaa-4291-a731-714d7c5fb3fe",
+              "name": "assistant.model",
+              "value": "={{ $json.body.message.assistant.model.model }}",
+              "type": "string"
+            },
+            {
+              "id": "888c9ea0-10cb-404e-a1bb-8cbb52a64b10",
+              "name": "body.message.assistant.model.emotionRecognitionEnabled",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "a7b296c5-fe44-437e-8073-1134c5ef9862",
+              "name": "customer.number",
+              "value": "={{ $json.body.message.call.customer.number }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -288,
+        1392
+      ],
+      "id": "f3c31a89-9f44-4afd-a467-9eab367616ab",
+      "name": "All Input Arguments"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_BASE_ID",
+          "mode": "list",
+          "cachedResultName": "AI Appointment Setter Build"
+        },
+        "table": {
+          "__rl": true,
+          "value": "YOUR_AIRTABLE_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Call Recording"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Call Recording ID": "={{ $json.call.id }}",
+            "Cost": "={{ String($json.cost ?? '') }}",
+            "Call Recording URL": "={{ $json.recordingUrl ?? '' }}",
+            "Transcript": "={{ $json.transcript }}",
+            "Customer Number": "={{ $json.customer.number }}",
+            "Started At": "={{ $json.startedAt }}",
+            "Ended At": "={{ $json.endedAt }}",
+            "Call Summay": "={{ $json.call.summary }}"
+          },
+          "matchingColumns": [
+            "Call Recording ID"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": true
+            },
+            {
+              "id": "Call Recording ID",
+              "displayName": "Call Recording ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Cost",
+              "displayName": "Cost",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Call Recording URL",
+              "displayName": "Call Recording URL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Transcript",
+              "displayName": "Transcript",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Customer Number",
+              "displayName": "Customer Number",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Started At",
+              "displayName": "Started At",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Ended At",
+              "displayName": "Ended At",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Call Summay",
+              "displayName": "Call Summay",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        -64,
+        1392
+      ],
+      "id": "8b936ea6-b019-43ce-8296-2506ac1b12a0",
+      "name": "Create or update a record"
+    },
+    {
+      "parameters": {
+        "content": "To record. or updadte Call Results",
+        "height": 256,
+        "width": 2672
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        1328
+      ],
+      "id": "0a9f653e-ce04-466b-95a1-347f422adb92",
+      "name": "Sticky Note4"
+    }
+  ],
+  "connections": {
+    "GetSlots": {
+      "main": [
+        [
+          {
+            "node": "Prepare GetSlots Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare GetSlots Request": {
+      "main": [
+        [
+          {
+            "node": "Check Google Calendar Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Google Calendar Availability": {
+      "main": [
+        [
+          {
+            "node": "Check if available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Vapi GetSlots": {
+      "main": [
+        []
+      ]
+    },
+    "Check if available?": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi GetSlots",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get all Caledar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all Caledar Events": {
+      "main": [
+        [
+          {
+            "node": "Available Start Time and Date Ranges",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Available Start Time and Date Ranges": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi GetSlots1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BookSlots": {
+      "main": [
+        [
+          {
+            "node": "Input Arguments from Booking Tools",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Escape Json",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error Response Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Error Response Payload": {
+      "main": [
+        [
+          {
+            "node": "Respond with Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escape Json": {
+      "main": [
+        [
+          {
+            "node": "Convert time to CST America/Chicago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert time to CST America/Chicago": {
+      "main": [
+        [
+          {
+            "node": "Create an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event": {
+      "main": [
+        [
+          {
+            "node": "Booking Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add Friendly Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Payload": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Success Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Vapi": {
+      "main": [
+        [
+          {
+            "node": "If Booking is confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond with Error": {
+      "main": [
+        []
+      ]
+    },
+    "If Booking is confirmed": {
+      "main": [
+        [
+          {
+            "node": "Information to be saved in Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information to be saved in Airtable": {
+      "main": [
+        [
+          {
+            "node": "Log book details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Friendly Error": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UpdateSlots": {
+      "main": [
+        [
+          {
+            "node": "Input Arguments from UpdateSlot Tool1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Arguments from UpdateSlot Tool1": {
+      "main": [
+        [
+          {
+            "node": "Check if required is provided",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if required is provided": {
+      "main": [
+        [
+          {
+            "node": "Find original appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error Response Payload1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find original appointment": {
+      "main": [
+        [
+          {
+            "node": "Update an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update an event": {
+      "main": [
+        [
+          {
+            "node": "Update record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response to call_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update record": {
+      "main": [
+        [
+          {
+            "node": "Response to call_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response to call_id": {
+      "main": [
+        [
+          {
+            "node": "Respond to VAPI about updating Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Error Response Payload1": {
+      "main": [
+        [
+          {
+            "node": "Respond with Error1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Arguments from Booking Tools": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CancelSlots": {
+      "main": [
+        [
+          {
+            "node": "Parse CancelSlot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CancelSlot": {
+      "main": [
+        [
+          {
+            "node": "Input Aguments from cancelslot Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Aguments from cancelslot Tool": {
+      "main": [
+        [
+          {
+            "node": "Check if required info is provided for cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if required info is provided for cancellation": {
+      "main": [
+        [
+          {
+            "node": "Find Appointment Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Appointment Record": {
+      "main": [
+        [
+          {
+            "node": "Delete an event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete an event": {
+      "main": [
+        [
+          {
+            "node": "Update Record to Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call_id and Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Record to Cancel": {
+      "main": [
+        [
+          {
+            "node": "Call_id and Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call_id and Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to VAPI about Cancellation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Error Response": {
+      "main": [
+        [
+          {
+            "node": "Respond with Error to VAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call_results": {
+      "main": [
+        [
+          {
+            "node": "All Input Arguments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Input Arguments": {
+      "main": [
+        [
+          {
+            "node": "Create or update a record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "pinData": {}
+}

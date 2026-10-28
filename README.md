@@ -1,0 +1,53 @@
+# AI Appointment Setter
+
+Callers book, move or cancel appointments at any hour, without waiting for a person.
+
+An AI voice agent that answers calls, checks the calendar, and books, moves or cancels appointments while the caller is still on the line, keeping Google Calendar and Airtable in step. Built with VAPI and n8n.
+
+**Full case study:** [ramonvallejera.com/case-study/ai-appointment-setter](https://ramonvallejera.com/case-study/ai-appointment-setter)
+
+![Process map](docs/process-map.svg)
+
+## How it works
+
+1. Caller asks for a time
+2. Agent checks Google Calendar
+3. Offers free times
+4. Books, moves or cancels the event
+5. Confirms on the call
+6. Call result saved in Airtable
+
+Built five n8n flows that a VAPI voice agent calls during the conversation: one checks free times in Google Calendar, one books the slot and logs it in Airtable, one finds and moves an existing appointment, one finds and cancels it, and one saves the result of every call.
+
+## What's in this repo
+
+| File | What it is |
+|---|---|
+| `workflow.json` | The n8n workflow, 52 nodes, ready to import |
+| `docs/process-map.svg` | The process map from the case study |
+
+Triggers: `GetSlots`, `call_results`, `Respond to Vapi GetSlots`, `Respond to Vapi GetSlots1`, `BookSlots`, `Respond with Error`, `Respond to Vapi`, `UpdateSlots`, `Respond to VAPI about updating Slots`, `Respond with Error1`, `CancelSlots`, `Respond to VAPI about Cancellation`, `Respond with Error to VAPI`.
+
+## Set it up
+
+1. In n8n, open **Workflows → Import from File** and choose `workflow.json`.
+2. Create these credentials and select them on the nodes that need them:
+
+   - Airtable (personal access token) (6 nodes)
+   - Google Calendar (OAuth2) (5 nodes)
+
+3. Replace the placeholders with your own records:
+
+   - `YOUR_AIRTABLE_BASE_ID` (6×)
+   - `YOUR_AIRTABLE_TABLE_ID` (6×): each node keeps the original table name as a hint
+   - `YOUR_CALENDAR_ID` (4×)
+   - `you@example.com` (5×): your calendar or sending address
+
+4. Run it once with test data, then activate it.
+
+Tools: n8n, VAPI, Google Calendar, Airtable.
+
+## Notes
+
+- Credentials, webhook IDs, pinned test data and account-specific IDs were removed before publishing. n8n assigns new webhook URLs on import.
+- Built by [Ramon Vallejera Jr.](https://ramonvallejera.com), AI Automation Engineer. Questions or a build like this for your team: [ramonvallejera.com/contact](https://ramonvallejera.com/contact).
