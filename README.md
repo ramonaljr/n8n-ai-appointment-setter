@@ -52,4 +52,4 @@ Tools: n8n, VAPI, Google Calendar, Airtable.
 ## Notes
 
 - Credentials, webhook IDs, pinned test data and account-specific IDs were removed before publishing. n8n assigns new webhook URLs on import.
-- Built by [Ramon Vallejera Jr.](https://ramonvallejera.com), AI Automation Engineer. Questions or a build like this for your team: [ramonvallejera.com/contact](https://ramonvallejera.com/contact).
+- Built by Ramon Vallejera Jr., AI Automation Specialist.
