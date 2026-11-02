@@ -17,16 +17,18 @@ An AI voice agent that answers calls, checks the calendar, and books, moves or c
 5. Confirms on the call
 6. Call result saved in Airtable
 
-Built five n8n flows that a VAPI voice agent calls during the conversation: one checks free times in Google Calendar, one books the slot and logs it in Airtable, one finds and moves an existing appointment, one finds and cancels it, and one saves the result of every call.
+Built five n8n flows that a VAPI voice agent calls during the conversation: one checks free times in Google Calendar, one checks the slot is still free, books it and logs it in Airtable, one finds an existing appointment and moves it once the new time is confirmed free, one finds and cancels it, and one saves the result of every call.
 
 ## What's in this repo
 
 | File | What it is |
 |---|---|
-| `workflow.json` | The n8n workflow, 52 nodes, ready to import |
+| `workflow.json` | The n8n workflow, 55 nodes, ready to import |
 | `docs/process-map.svg` | The process map from the case study |
 
-Triggers: `GetSlots`, `call_results`, `Respond to Vapi GetSlots`, `Respond to Vapi GetSlots1`, `BookSlots`, `Respond with Error`, `Respond to Vapi`, `UpdateSlots`, `Respond to VAPI about updating Slots`, `Respond with Error1`, `CancelSlots`, `Respond to VAPI about Cancellation`, `Respond with Error to VAPI`.
+Triggers: the webhooks `GetSlots`, `BookSlots`, `UpdateSlots`, `CancelSlots` and `call_results`, one per VAPI tool.
+
+Booking rules: `BookSlots` and `UpdateSlots` read the calendar again right before writing, and only go ahead if the time is a weekday, 9:00 AM to 6:00 PM Central, in the future and clear of other events. Otherwise nothing is booked or moved and VAPI gets the reason to tell the caller. Change the hours in the `Check Slot Is Free`, `Check New Time Is Free` and `Available Start Time and Date Ranges` code nodes.
 
 ## Set it up
 
@@ -34,14 +36,14 @@ Triggers: `GetSlots`, `call_results`, `Respond to Vapi GetSlots`, `Respond to Va
 2. Create these credentials and select them on the nodes that need them:
 
    - Airtable (personal access token) (6 nodes)
-   - Google Calendar (OAuth2) (5 nodes)
+   - Google Calendar (OAuth2) (6 nodes)
 
 3. Replace the placeholders with your own records:
 
    - `YOUR_AIRTABLE_BASE_ID` (6×)
    - `YOUR_AIRTABLE_TABLE_ID` (6×): each node keeps the original table name as a hint
-   - `YOUR_CALENDAR_ID` (4×)
-   - `you@example.com` (5×): your calendar or sending address
+   - `YOUR_CALENDAR_ID` (6×)
+   - `you@example.com` (6×): your calendar or sending address
 
 4. Run it once with test data, then activate it.
 
